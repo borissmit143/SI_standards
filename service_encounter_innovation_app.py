@@ -756,7 +756,8 @@ def option_text(item: dict) -> str:
 
 
 def render_clv_stage(
-    stage: str, heading: str, context: dict, service_description: str, profiles: pd.DataFrame, api_key: str
+    stage: str, heading: str, context: dict, service_description: str, profiles: pd.DataFrame, api_key: str,
+    fixed_profiles: pd.DataFrame | None = None,
 ) -> bool:
     st.subheader(heading)
     st.caption(f"Target persona: {context['persona']}")
@@ -769,9 +770,16 @@ def render_clv_stage(
         "Profit margin (%)", min_value=0.0, max_value=100.0, value=30.0, step=1.0, key=f"{stage}_margin",
     )
     st.info("CAC is fixed at $100 per acquired customer. Monthly sales are annualized (×12); no discount rate is applied.")
-    with st.expander("Customer profiles for the CLV simulation"):
-        selected_profiles = filter_profiles(profiles, stage)
-        st.caption(f"{len(selected_profiles):,} of {len(profiles):,} profiles selected")
+    if fixed_profiles is None:
+        with st.expander("Customer profiles for the CLV simulation"):
+            selected_profiles = filter_profiles(profiles, stage)
+            st.caption(f"{len(selected_profiles):,} of {len(profiles):,} profiles selected")
+    else:
+        selected_profiles = fixed_profiles.copy()
+        st.info(
+            f"Using the same {len(selected_profiles):,} customers from the baseline CLV. "
+            "The customer sample cannot be changed for this comparison."
+        )
     if st.button("Run CLV analysis", key=f"{stage}_run", type="primary", use_container_width=True):
         if selected_profiles.empty:
             st.error("Select at least one customer profile.")
@@ -783,6 +791,7 @@ def render_clv_stage(
             st.session_state[stage] = {
                 "results": results, "monthly_sales": monthly_sales, "margin": margin,
                 "persona": context["persona"], "service_description": service_description,
+                "profiles": selected_profiles.copy(),
             }
     run = st.session_state.get(stage)
     if not run:
@@ -977,10 +986,22 @@ for index, encounter in enumerate(concept["service_encounters"]):
     )
 
 enriched_description = journey_text(concept, designs)
-render_clv_stage(
-    "clv_after", "7. Recalculate CLV with standards and servicescapes", session_context,
-    enriched_description, all_profiles, api_key,
-)
+baseline_profiles = st.session_state.get("clv_before", {}).get("profiles")
+if baseline_profiles is None:
+    st.warning(
+        "Run the baseline CLV once more to lock its customer sample before running the comparison CLV."
+    )
+else:
+    follow_up_description = f"""FOLLOW-UP EVALUATION FOR THE SAME CUSTOMER:
+You previously evaluated the baseline version of this service. The firm has now added the service standards and
+servicescape elements listed below. Reassess your five-year use probabilities based specifically on how these changes
+affect reliability, comfort, clarity, trust, convenience, and your likelihood of returning.
+
+{enriched_description}"""
+    render_clv_stage(
+        "clv_after", "7. Recalculate CLV with standards and servicescapes", session_context,
+        follow_up_description, all_profiles, api_key, fixed_profiles=baseline_profiles,
+    )
 st.download_button(
     "Download final service design", enriched_description.encode("utf-8"),
     f"{safe_filename(session_context['firm'])}_service_encounters.txt", "text/plain",
