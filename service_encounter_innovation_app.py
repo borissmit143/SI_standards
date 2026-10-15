@@ -310,7 +310,9 @@ def filter_profiles(dataframe: pd.DataFrame, key_prefix: str = "clv") -> pd.Data
 
 def configured_api_key() -> str:
     try:
-        return str(st.secrets["GOOGLE_API_KEY"])
+        # Tolerate whitespace or an extra pair of quotes accidentally pasted
+        # into a deployment's secrets editor.
+        return str(st.secrets["GOOGLE_API_KEY"]).strip().strip('"').strip("'").strip()
     except (KeyError, FileNotFoundError):
         return ""
 
@@ -405,6 +407,14 @@ def run_discussion(context: dict, panel: list[dict], api_key: str) -> list[dict]
         try:
             response = llm.invoke(discussion_prompt(context, members[speaker], transcript, move, target))
         except Exception as exc:
+            error_text = str(exc)
+            if "API_KEY_INVALID" in error_text or "API key not valid" in error_text:
+                progress.empty()
+                st.error(
+                    "Google rejected GOOGLE_API_KEY. Save a valid Gemini API key in Streamlit secrets, "
+                    "then reboot the app before trying again."
+                )
+                return []
             st.warning(f"{speaker} could not respond: {exc}")
             time.sleep(1)
             continue
@@ -940,23 +950,19 @@ for index, encounter in enumerate(concept["service_encounters"]):
             with st.expander("Verified slide evidence"):
                 st.markdown(evidence_list(options["standards"], options["servicescapes"]))
 
-all_generated = all(str(i) in options_by_encounter for i in range(len(concept["service_encounters"])))
-if st.button("Finalize enriched service encounters", type="primary", use_container_width=True, disabled=not all_generated):
+if st.button("Finalize enriched service encounters", type="primary", use_container_width=True):
     designs = {}
-    incomplete = []
     for index in range(len(concept["service_encounters"])):
-        standard = st.session_state.get(f"standard_choice_{index}", "Select one…")
-        servicescape = st.session_state.get(f"servicescape_choice_{index}", "Select one…")
-        if standard == "Select one…" or servicescape == "Select one…":
-            incomplete.append(index + 1)
-        else:
-            designs[str(index)] = {"standard": standard, "servicescape": servicescape}
-    if incomplete:
-        st.error("Select an option or Skip for both fields in encounter(s): " + ", ".join(map(str, incomplete)))
-    else:
-        st.session_state["enc_designs"] = designs
-        st.session_state.pop("clv_after", None)
-        st.rerun()
+        standard = st.session_state.get(f"standard_choice_{index}", "Skip")
+        servicescape = st.session_state.get(f"servicescape_choice_{index}", "Skip")
+        if standard == "Select one…":
+            standard = "Skip"
+        if servicescape == "Select one…":
+            servicescape = "Skip"
+        designs[str(index)] = {"standard": standard, "servicescape": servicescape}
+    st.session_state["enc_designs"] = designs
+    st.session_state.pop("clv_after", None)
+    st.rerun()
 
 designs = st.session_state.get("enc_designs")
 if not designs:
